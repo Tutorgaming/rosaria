@@ -74,6 +74,9 @@ class RosAriaNode
     ros::Publisher sonar_pub;
     ros::Publisher sonar_pointcloud2_pub;
     ros::Publisher voltage_pub;
+    ros::Publisher avg_voltage_pub;
+
+    ros::Publisher charging_pub; // Guess Charging State From Voltage beyond 13.9
 
     ros::Publisher recharge_state_pub;
     std_msgs::Int8 recharge_state;
@@ -331,9 +334,11 @@ RosAriaNode::RosAriaNode(ros::NodeHandle nh) :
       boost::bind(&RosAriaNode::sonarConnectCb, this));
 
   voltage_pub = n.advertise<std_msgs::Float64>("battery_voltage", 1000);
+  avg_voltage_pub = n.advertise<std_msgs::Float64>("battery_avg_voltage", 1000);
+  charging_pub = n.advertise<std_msgs::Bool>("battery_charging", 1000);
+
   recharge_state_pub = n.advertise<std_msgs::Int8>("battery_recharge_state", 5, true /*latch*/ );
   recharge_state.data = -2;
-  state_of_charge_pub = n.advertise<std_msgs::Float32>("battery_state_of_charge", 100);
 
   motors_state_pub = n.advertise<std_msgs::Bool>("motors_state", 5, true /*latch*/ );
   motors_state.data = false;
@@ -475,6 +480,8 @@ int RosAriaNode::Setup()
 
   dynamic_reconfigure_server->setCallback(boost::bind(&RosAriaNode::dynamic_reconfigureCB, this, _1, _2));
 
+  // Check if there's Charging State
+  state_of_charge_pub = n.advertise<std_msgs::Float32>("battery_state_of_charge", 100);
 
   // Enable the motors
   robot->enableMotors();
@@ -495,16 +502,16 @@ int RosAriaNode::Setup()
   // connect to lasers and create publishers
   if(publish_aria_lasers)
   {
-    ROS_INFO_NAMED("rosaria", "rosaria: Connecting to laser(s) configured in ARIA parameter file(s)...");
+    ROS_INFO_NAMED("rosaria", "RosAria: Connecting to laser(s) configured in ARIA parameter file(s)...");
     if (!laserConnector->connectLasers())
     {
-      ROS_FATAL_NAMED("rosaria", "rosaria: Error connecting to laser(s)...");
+      ROS_FATAL_NAMED("rosaria", "RosAria: Error connecting to laser(s)...");
       return 1;
     }
 
     robot->lock();
     const std::map<int, ArLaser*> *lasers = robot->getLaserMap();
-    ROS_INFO_NAMED("rosaria", "rosaria: there are %lu connected lasers", lasers->size());
+    ROS_INFO_NAMED("rosaria", "RosAria: there are %lu connected lasers", lasers->size());
     for(std::map<int, ArLaser*>::const_iterator i = lasers->begin(); i != lasers->end(); ++i)
     {
       ArLaser *l = i->second;
@@ -513,11 +520,11 @@ int RosAriaNode::Setup()
       if(lasers->size() > 1 || ln > 1) // no number if only one laser which is also laser 1
         tfname += ln;
       tfname += "_frame";
-      ROS_INFO_NAMED("rosaria", "rosaria: Creating publisher for laser #%d named %s with tf frame name %s", ln, l->getName(), tfname.c_str());
+      ROS_INFO_NAMED("rosaria", "RosAria: Creating publisher for laser #%d named %s with tf frame name %s", ln, l->getName(), tfname.c_str());
       new LaserPublisher(l, n, true, tfname);
     }
     robot->unlock();
-    ROS_INFO_NAMED("rosaria", "rosaria: Done creating laser publishers");
+    ROS_INFO_NAMED("rosaria", "RosAria: Done creating laser publishers");
   }
 
   // subscribe to command topics
@@ -531,7 +538,7 @@ int RosAriaNode::Setup()
   if (cmdvel_timeout_param > 0.0)
     cmdvel_watchdog_timer = n.createTimer(ros::Duration(0.1), &RosAriaNode::cmdvel_watchdog, this);
 
-  ROS_INFO_NAMED("rosaria", "rosaria: Setup complete");
+  ROS_INFO_NAMED("rosaria", "RosAria: Setup complete");
   return 0;
 }
 
@@ -706,6 +713,7 @@ void RosAriaNode::publish()
 bool RosAriaNode::enable_charge_pin_cb(std_srvs::Empty::Request& request, std_srvs::Empty::Response& response)
 {
   robot->lock();
+  ROS_INFO("RosAria : DEPLOYING Poco Charging Pin");
   robot->enableRobotChargePin();
   robot->unlock();
   return true;
@@ -714,6 +722,7 @@ bool RosAriaNode::enable_charge_pin_cb(std_srvs::Empty::Request& request, std_sr
 bool RosAriaNode::disable_charge_pin_cb(std_srvs::Empty::Request& request, std_srvs::Empty::Response& response)
 {
   robot->lock();
+  ROS_INFO("RosAria : RETRACTING Poco Charging Pin");
   robot->disableRobotChargePin();
   robot->unlock();
   return true;
